@@ -21,7 +21,7 @@ float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
     float *d_res, *d_mat1, *d_mat2;
     //malloc the device memory for matrices 
     cudaError_t result = cudaMalloc((void**)&d_res, sizeof(float)*m1*n2);
-    result_1 = cudaMalloc((void**)&d_mat1, sizeof(float)*m1*m2);
+    result = cudaMalloc((void**)&d_mat1, sizeof(float)*m1*m2);
     result = cudaMalloc((void**)&d_mat2, sizeof(float)*n1*n2);
 
     //init source matrices in device memory
@@ -40,6 +40,9 @@ float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
     //copy back the multiplication result
     float* res = new float[m1*n2];
     result = cudaMemcpy(res, d_res, sizeof(float)*m1*n2, cudaMemcpyDeviceToHost);
+    cudaFree(d_res);
+    cudaFree(d_mat1);
+    cudaFree(d_mat2);
     return res;
 }
 
@@ -60,14 +63,17 @@ float* MatrixMulCPU(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
 }
 
 bool CompareMatrix(float mat1[], float mat2[], int m1, int m2){
+    float err = 0;
     for (int x=0; x<m1; x++){
         for (int y=0; y<m2; y++){
-            float diff = mat1[m*y+x] - mat2[m*y+x];
-            if (diff != 0.0){
-                printf("matrix comparison failed on [%d,%d],diff:%f\n", x, y, diff);
-            }
+            err += mat1[m2*y+x] - mat2[m2*y+x];
         }
     }
+    if (err > 0.1){
+        printf("matrix comparison failed.error:%f\n", err); 
+        return false;
+    }
+    return true;
 }
 
 void FillMatrix(float mat[], int m1, int m2){
@@ -97,6 +103,7 @@ int main(int argc, char *argv[]){
     FillMatrix((float*)matrix_a, m1, m2);
     FillMatrix((float*)matrix_b, n1, n2);
     float *res = MatrixMulCPU((float*)matrix_a, m1, m2, (float*)matrix_b, n1, n2);
+    //float *res = MatrixMultGPU0((float*)matrix_a, m1, m2, (float*)matrix_b, n1, n2);
     PrintMatrix(res, m1, m2);
     delete res;
 }
