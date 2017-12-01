@@ -125,12 +125,12 @@ void PrintMatrix(float mat[], int m1, int m2){
 
 
 int main(int argc, char *argv[]){
-    int m1 = 64;
+    int m1 = 1024;
     int m2;
-    int n1 = m2 = 64;
-    int n2 = 64;
-    float matrix_a[m1][m2];
-    float matrix_b[n1][n2];
+    int n1 = m2 = 1024;
+    int n2 = 1024;
+    float *matrix_a = new float[m1*m2];
+    float *matrix_b = new float[n1*n2];
     FillMatrix((float*)matrix_a, m1, m2);
     FillMatrix((float*)matrix_b, n1, n2);
     //float *ref = MatrixMulCPU((float*)matrix_a, m1, m2, (float*)matrix_b, n1, n2);
