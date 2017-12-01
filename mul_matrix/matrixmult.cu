@@ -21,6 +21,13 @@ __global__ void kMatrixMul0 (float *d_res,
 
 float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
     float *d_res, *d_mat1, *d_mat2;
+    cudaEvent_t start, end;
+    cudaError_t error;
+    error = cudaEventCreate(&start);
+    error = cudaEventCreate(&end);
+
+
+
     //malloc the device memory for matrices 
     cudaError_t result = cudaMalloc((void**)&d_res, sizeof(float)*m1*n2);
     result = cudaMalloc((void**)&d_mat1, sizeof(float)*m1*m2);
@@ -33,6 +40,8 @@ float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
     assert (result == cudaSuccess);
     result = cudaMemcpy(d_mat2, mat2, sizeof(float)*n1*n2, cudaMemcpyHostToDevice);
     assert (result == cudaSuccess);
+
+    cudaEventRecord(start, NULL);
 
     int N = 16;
 
@@ -47,6 +56,14 @@ float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
     float* res = new float[m1*n2];
     result = cudaMemcpy(res, d_res, sizeof(float)*m1*n2, cudaMemcpyDeviceToHost);
     assert (result == cudaSuccess);
+
+    cudaEventRecord(end, NULL);
+    error = cudaEventSynchronize(end);
+
+    float msecTotal = 0.0f;
+    error = cudaEventElapsedTime(&msecTotal, start, end);
+    printf("calculation Time:%f ms\n", msecTotal);
+
     cudaFree(d_res);
     cudaFree(d_mat1);
     cudaFree(d_mat2);
@@ -108,10 +125,10 @@ void PrintMatrix(float mat[], int m1, int m2){
 
 
 int main(int argc, char *argv[]){
-    int m1 = 32;
+    int m1 = 64;
     int m2;
-    int n1 = m2 = 32;
-    int n2 = 32;
+    int n1 = m2 = 64;
+    int n2 = 64;
     float matrix_a[m1][m2];
     float matrix_b[n1][n2];
     FillMatrix((float*)matrix_a, m1, m2);
