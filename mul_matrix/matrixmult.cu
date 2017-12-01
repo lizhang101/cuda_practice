@@ -137,6 +137,8 @@ int main(int argc, char *argv[]){
     float *res = MatrixMultGPU0((float*)matrix_a, m1, m2, (float*)matrix_b, n1, n2);
     //printf("error:%f\n", CompareMatrix(ref, res, m1, n2));
     //PrintMatrix(res, m1, m2);
+    delete[] matrix_a;
+    delete[] matrix_b;
     delete res;
     //delete ref;
 }
