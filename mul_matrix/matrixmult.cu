@@ -2,7 +2,10 @@
 #include <stdio.h>
 #include <cassert>
 #include <cuda_runtime.h>
-
+/*
+   Naive implementation.
+   Allocate one thread for one element in result matrix, processing dot(Arow, Bcol);
+*/
 __global__ void kMatrixMul0 (float *d_res, 
                                float *d_mat1, int m1, int m2,
                                float *d_mat2, int n1, int n2){
@@ -18,6 +21,36 @@ __global__ void kMatrixMul0 (float *d_res,
     }
     d_res[n2*y+x] = sum;
 };
+
+/* Using shared memory 
+*/
+template<int BLOCK_SIZE>
+__global__ void kMatrixMul1 (float *d_res, 
+                               float *d_mat1, int m1, int m2,
+                               float *d_mat2, int n1, int n2) {
+    //assume squre block
+    __shared__ float As[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float Bs[BLOCK_SIZE][BLOCK_SIZE];
+    //trivial opt: calculate these in CPU, shared by all blocks
+    int aStart = blockDim.y*blockIdx.y * m2;
+    int bStart = blockDim.x*blockIdx.x;
+    int bStep = blockDim.y*n2;
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    float c = 0.0f;
+    for (int a = aStart, b = bStart; a < m2; a += blockDim.x, b += bStep) {
+        //load data
+        As[ty][tx] = d_mat1[a + m2 * ty + tx];   
+        Bs[ty][tx] = d_mat2[b + n2 * ty + tx];
+        __syncthreads();
+        for (int k = 0; k<blockDim.x; k++){
+            c += As[ty][k] * Bs[k][tx];
+        }
+    }
+    d_res[(blockDim.y*blockIdx.y+ty)*n2+blockDim.x*blockIdx.x+tx] = c;
+    //__syncthreads();
+}
+
 
 float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
     float *d_res, *d_mat1, *d_mat2;
@@ -43,7 +76,7 @@ float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
 
     cudaEventRecord(start, NULL);
 
-    int N = 16;
+    int N = 32;
 
     dim3 block_size(N, N);
     //grid width in blocks
@@ -51,7 +84,13 @@ float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
     //grid height in blocks
     int grid_hib = ceil(float(m1)/float(N));
     dim3 grid_size(grid_wib, grid_hib);
-    kMatrixMul0<<<grid_size, block_size>>>(d_res, d_mat1, m1, m2, d_mat2, n1, n2);
+
+    //naive version
+    //kMatrixMul0<<<grid_size, block_size>>>(d_res, d_mat1, m1, m2, d_mat2, n1, n2);
+
+    //sharedMem version
+    kMatrixMul1<32><<<grid_size, block_size>>>(d_res, d_mat1, m1, m2, d_mat2, n1, n2);
+
     //copy back the multiplication result
     float* res = new float[m1*n2];
     result = cudaMemcpy(res, d_res, sizeof(float)*m1*n2, cudaMemcpyDeviceToHost);
