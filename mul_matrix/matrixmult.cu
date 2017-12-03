@@ -22,8 +22,7 @@ __global__ void kMatrixMul0 (float *d_res,
     d_res[n2*y+x] = sum;
 };
 
-/* Using shared memory 
-*/
+/* Using shared memory */
 template<int BLOCK_SIZE>
 __global__ void kMatrixMul1 (float *d_res, 
                                float *d_mat1, int m1, int m2,
@@ -46,10 +45,68 @@ __global__ void kMatrixMul1 (float *d_res,
         for (int k = 0; k<blockDim.x; k++){
             c += As[ty][k] * Bs[k][tx];
         }
+        __syncthreads();
     }
     d_res[(blockDim.y*blockIdx.y+ty)*n2+blockDim.x*blockIdx.x+tx] = c;
-    //__syncthreads();
 }
+
+/* Using register blocking */
+template<int BLOCK_SIZE, int REGT_SIZE>
+__global__ void kMatrixMul2 (float *d_res, 
+                               float *d_mat1, int m1, int m2,
+                               float *d_mat2, int n1, int n2) {
+    //assume squre block
+    __shared__ float As[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float Bs[BLOCK_SIZE][BLOCK_SIZE];
+    //trivial opt: calculate these in CPU, shared by all blocks
+    int aStart = blockDim.y*blockIdx.y * m2;
+    int bStart = blockDim.x*blockIdx.x;
+    int bStep = blockDim.y*n2;
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    int reg_tiles = BLOCK_SIZE / REGT_SIZE;
+
+    float acc[REGT_SIZE][REGT_SIZE];
+    float Ar;
+    float Br[REGT_SIZE];
+    #pragma unroll
+    for (int i = 0; i<REGT_SIZE; i++){
+        #pragma unroll
+        for (int j = 0; j<REGT_SIZE; j++){
+            acc[i][j] = 0.0f;
+        }
+    }
+    //block 32x32, each thread work on 2x2
+    for (int a = aStart, b = bStart; a < m2; a += blockDim.x, b += bStep) {
+        //load data
+        #pragma unroll
+        for (int i = 0; i<REGT_SIZE; i++){
+            #pragma unroll
+            for (int j = 0; j<REGT_SIZE; j++){
+                As[ty+i][tx+j] = d_mat1[a + m2 * (ty + i) + tx + j];
+                Bs[ty+i][tx+j] = d_mat2[b + n2 * (ty + i) + tx + j];
+            }
+        }
+        __syncthreads();
+        
+        for (int k=0; k<BLOCK_SIZE; k+=REGT_SIZE){
+            #pragma unroll
+            for (int i=0; i<REGT_SIZE; i++){
+                #pragma unroll
+                for (int j = 0; j<REGT_SIZE; j++){
+                    int ax = k + j;
+                    int ay = k + i;
+                    acc[ty+i][tx+j] += As[ty][k] * Bs[k][tx];
+                }
+            }
+        }
+        __syncthreads();
+    }
+    d_res[(blockDim.y*blockIdx.y+ty)*n2+blockDim.x*blockIdx.x+tx] = c;
+}
+
+
+
 
 
 float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
@@ -76,8 +133,7 @@ float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
 
     cudaEventRecord(start, NULL);
 
-    int N = 32;
-
+    int N = 64;
     dim3 block_size(N, N);
     //grid width in blocks
     int grid_wib = ceil(float(n2)/float(N));
@@ -89,7 +145,7 @@ float* MatrixMultGPU0(float *mat1, int m1, int m2, float *mat2, int n1, int n2){
     //kMatrixMul0<<<grid_size, block_size>>>(d_res, d_mat1, m1, m2, d_mat2, n1, n2);
 
     //sharedMem version
-    kMatrixMul1<32><<<grid_size, block_size>>>(d_res, d_mat1, m1, m2, d_mat2, n1, n2);
+    kMatrixMul1<64><<<grid_size, block_size>>>(d_res, d_mat1, m1, m2, d_mat2, n1, n2);
 
     //copy back the multiplication result
     float* res = new float[m1*n2];
