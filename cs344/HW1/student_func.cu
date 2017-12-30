@@ -69,7 +69,7 @@ void your_rgba_to_greyscale(const uchar4 * const h_rgbaImage, uchar4 * const d_r
 {
   //You must fill in the correct sizes for the blockSize and gridSize
   //currently only one block with one thread is being launched
-  const int block_w = 16;
+  const int block_w = 32;
   //printf ("r:%d c:%d rb:%d cb:%d\n", numRows, numCols, numRows/block_w, numCols/block_w);
   std::cout << "r:" << numRows 
        << "c:" << numCols 
