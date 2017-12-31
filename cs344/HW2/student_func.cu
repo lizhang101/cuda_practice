@@ -105,6 +105,7 @@
 static const int BLOCK_W = 32;
 
 //FIXME: the filter size is defined in HW2.cpp which is 9. Here just copy that number.
+//FIXME: the filtered result is not correct at the block edge!!
 __constant__ float const_filter[9*9];
 __global__ void gaussian_blur_shm(const unsigned char* const inputChannel,
                                     unsigned char* const outputChannel,
@@ -124,19 +125,19 @@ __global__ void gaussian_blur_shm(const unsigned char* const inputChannel,
     img_y = max(y - d, 0);
     image_tile[threadIdx.y][threadIdx.x] = float(inputChannel[img_y * numCols + img_x]);
 
-    if ( threadIdx.y > blockDim.y - 8) {
+    if ( threadIdx.y >= blockDim.y - 8) {
         image_tile[threadIdx.y+8][threadIdx.x] = float(inputChannel[(img_y+8) * numCols + img_x]);
     }
-    if (threadIdx.x > blockDim.x - 8) {
+    if (threadIdx.x >= blockDim.x - 8) {
         image_tile[threadIdx.y][threadIdx.x+8] = float(inputChannel[img_y * numCols + img_x+8]);
     }
-    if ((threadIdx.y > blockDim.y - 8) && (threadIdx.x > blockDim.x - 8)) {
+    if ((threadIdx.y >= blockDim.y - 8) && (threadIdx.x >= blockDim.x - 8)) {
         image_tile[threadIdx.y+8][threadIdx.x+8] = float(inputChannel[(img_y + 8) * numCols + img_x+8]);
     }
     __syncthreads();
     for (int fy = 0; fy < filterWidth; ++fy){
         for (int fx = 0; fx < filterWidth; ++fx){
-            filtered += image_tile[threadIdx.y + fy][threadIdx.x + fx] * filter[fy * filterWidth + fx];
+            filtered += image_tile[threadIdx.y + fy][threadIdx.x + fx] * const_filter[fy * filterWidth + fx];
         }
     }
     //implicitly convert to unsighed char
