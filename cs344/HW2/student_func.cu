@@ -115,24 +115,24 @@ __global__ void gaussian_blur_shm(const unsigned char* const inputChannel,
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     float filtered = 0.0;
     if (x >= numCols || y >= numRows) { return; }
-    __shared__ float image_tile[BLOCK_W+9][BLOCK_W+9];
-    int d = filterWidth / 2;
+    __shared__ float image_tile[BLOCK_W+8][BLOCK_W+8];
+    int d = 4;
     int img_x, img_y;
     //int blk_x, blk_y;
     
     img_x = max(x - d, 0);
     img_y = max(y - d, 0);
     image_tile[threadIdx.y][threadIdx.x] = float(inputChannel[img_y * numCols + img_x]);
-    if ( threadIdx.y > blockDim.y - filterWidth) {
-        image_tile[threadIdx.y+filterWidth][threadIdx.x] = float(inputChannel[(img_y+filterWidth) * numCols + img_x]);
-    }
-    if (threadIdx.x > blockDim.x - filterWidth) {
-        image_tile[threadIdx.y][threadIdx.x+filterWidth] = float(inputChannel[img_y * numCols + img_x+filterWidth]);
-    }
-    if ((threadIdx.y > blockDim.y - filterWidth) && (threadIdx.x > blockDim.x - filterWidth)) {
-        image_tile[threadIdx.y+filterWidth][threadIdx.x+filterWidth] = float(inputChannel[(img_y + filterWidth) * numCols + img_x+filterWidth]);
-    }
 
+    if ( threadIdx.y > blockDim.y - 8) {
+        image_tile[threadIdx.y+8][threadIdx.x] = float(inputChannel[(img_y+8) * numCols + img_x]);
+    }
+    if (threadIdx.x > blockDim.x - 8) {
+        image_tile[threadIdx.y][threadIdx.x+8] = float(inputChannel[img_y * numCols + img_x+8]);
+    }
+    if ((threadIdx.y > blockDim.y - 8) && (threadIdx.x > blockDim.x - 8)) {
+        image_tile[threadIdx.y+8][threadIdx.x+8] = float(inputChannel[(img_y + 8) * numCols + img_x+8]);
+    }
     __syncthreads();
     for (int fy = 0; fy < filterWidth; ++fy){
         for (int fx = 0; fx < filterWidth; ++fx){
@@ -283,7 +283,7 @@ void allocateMemoryAndCopyToGPU(const size_t numRowsImage, const size_t numColsI
   checkCudaErrors(cudaMemcpyToSymbol(const_filter, h_filter, sizeof(float)*filterWidth*filterWidth));
 
 }
-#define NoShmem 1
+#define NoShmem 0
 void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_inputImageRGBA,
                         uchar4* const d_outputImageRGBA, const size_t numRows, const size_t numCols,
                         unsigned char *d_redBlurred, 
@@ -307,7 +307,7 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
   cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
   //TODO: Call your convolution kernel here 3 times, once for each color channel.
-#ifdef NoShmem
+#if NoShmem
     gaussian_blur<<<gridSize, blockSize>>> (d_red, d_redBlurred, numRows, numCols, d_filter, filterWidth);
     gaussian_blur<<<gridSize, blockSize>>> (d_green, d_greenBlurred, numRows, numCols, d_filter, filterWidth);
     gaussian_blur<<<gridSize, blockSize>>> (d_blue, d_blueBlurred, numRows, numCols, d_filter, filterWidth);
