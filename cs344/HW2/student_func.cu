@@ -102,7 +102,46 @@
 
 #include "utils.h"
 
-#define block_w 32
+static const int BLOCK_W = 32;
+
+//FIXME: the filter size is defined in HW2.cpp which is 9. Here just copy that number.
+__constant__ float const_filter[9*9];
+__global__ void gaussian_blur_shm(const unsigned char* const inputChannel,
+                                    unsigned char* const outputChannel,
+                                    int numRows, int numCols,
+                                    const float* const filter, const int filterWidth)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    float filtered = 0.0;
+    if (x >= numCols || y >= numRows) { return; }
+    __shared__ float image_tile[BLOCK_W+9][BLOCK_W+9];
+    int d = filterWidth / 2;
+    int img_x, img_y;
+    //int blk_x, blk_y;
+    
+    img_x = max(x - d, 0);
+    img_y = max(y - d, 0);
+    image_tile[threadIdx.y][threadIdx.x] = float(inputChannel[img_y * numCols + img_x]);
+    if ( threadIdx.y > blockDim.y - filterWidth) {
+        image_tile[threadIdx.y+filterWidth][threadIdx.x] = float(inputChannel[(img_y+filterWidth) * numCols + img_x]);
+    }
+    if (threadIdx.x > blockDim.x - filterWidth) {
+        image_tile[threadIdx.y][threadIdx.x+filterWidth] = float(inputChannel[img_y * numCols + img_x+filterWidth]);
+    }
+    if ((threadIdx.y > blockDim.y - filterWidth) && (threadIdx.x > blockDim.x - filterWidth)) {
+        image_tile[threadIdx.y+filterWidth][threadIdx.x+filterWidth] = float(inputChannel[(img_y + filterWidth) * numCols + img_x+filterWidth]);
+    }
+
+    __syncthreads();
+    for (int fy = 0; fy < filterWidth; ++fy){
+        for (int fx = 0; fx < filterWidth; ++fx){
+            filtered += image_tile[threadIdx.y + fy][threadIdx.x + fx] * filter[fy * filterWidth + fx];
+        }
+    }
+    //implicitly convert to unsighed char
+    outputChannel[y * numCols + x] = filtered;
+}
 __global__
 void gaussian_blur(const unsigned char* const inputChannel,
                    unsigned char* const outputChannel,
@@ -137,17 +176,14 @@ void gaussian_blur(const unsigned char* const inputChannel,
     return;
   }
   float filtered = 0.0;
-  __shared__ float image_tile[block_w][block_w];
-  image_tile[threadIdx.y][threadIdx.x] = float(inputChannel[y * numCols + x]);
-  __syncthreads();
-  
   for (int filter_r = -filterWidth/2; filter_r <= filterWidth/2; ++ filter_r) {
     for (int filter_c = -filterWidth/2; filter_c <= filterWidth/2; ++ filter_c) {
         int image_x = min(max(x + filter_c, 0), numCols-1);
         int image_y = min(max(y + filter_r, 0), numRows-1);
         int image_pos = image_y * numCols + image_x;
         int filter_pos = (filter_r + filterWidth/2) * filterWidth + (filter_c + filterWidth/2);
-        filtered += float(inputChannel[image_pos]) * float(filter[filter_pos]);
+        filtered += float(inputChannel[image_pos]) * const_filter[filter_pos];
+        //filtered += float(inputChannel[image_pos]) * float(filter[filter_pos]);
     }
   }
   outputChannel[y * numCols + x] = filtered;
@@ -244,9 +280,10 @@ void allocateMemoryAndCopyToGPU(const size_t numRowsImage, const size_t numColsI
   //on the GPU.  cudaMemcpy(dst, src, numBytes, cudaMemcpyHostToDevice);
   //Remember to use checkCudaErrors!
   checkCudaErrors(cudaMemcpy(d_filter, h_filter, sizeof(float) * filterWidth * filterWidth, cudaMemcpyHostToDevice));
+  checkCudaErrors(cudaMemcpyToSymbol(const_filter, h_filter, sizeof(float)*filterWidth*filterWidth));
 
 }
-
+#define NoShmem 1
 void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_inputImageRGBA,
                         uchar4* const d_outputImageRGBA, const size_t numRows, const size_t numCols,
                         unsigned char *d_redBlurred, 
@@ -255,7 +292,7 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
                         const int filterWidth)
 {
   //TODO: Set reasonable block size (i.e., number of threads per block)
-  const dim3 blockSize(block_w, block_w);
+  const dim3 blockSize(BLOCK_W, BLOCK_W);
 
   //TODO:
   //Compute correct grid size (i.e., number of blocks per kernel launch)
@@ -270,9 +307,15 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
   cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
   //TODO: Call your convolution kernel here 3 times, once for each color channel.
+#ifdef NoShmem
     gaussian_blur<<<gridSize, blockSize>>> (d_red, d_redBlurred, numRows, numCols, d_filter, filterWidth);
     gaussian_blur<<<gridSize, blockSize>>> (d_green, d_greenBlurred, numRows, numCols, d_filter, filterWidth);
     gaussian_blur<<<gridSize, blockSize>>> (d_blue, d_blueBlurred, numRows, numCols, d_filter, filterWidth);
+#else
+    gaussian_blur_shm<<<gridSize, blockSize>>> (d_red, d_redBlurred, numRows, numCols, d_filter, filterWidth);
+    gaussian_blur_shm<<<gridSize, blockSize>>> (d_green, d_greenBlurred, numRows, numCols, d_filter, filterWidth);
+    gaussian_blur_shm<<<gridSize, blockSize>>> (d_blue, d_blueBlurred, numRows, numCols, d_filter, filterWidth);
+#endif
 
   // Again, call cudaDeviceSynchronize(), then call checkCudaErrors() immediately after
   // launching your kernel to make sure that you didn't make any mistakes.
