@@ -104,9 +104,10 @@
 
 static const int BLOCK_W = 32;
 
-//FIXME: the filter size is defined in HW2.cpp which is 9. Here just copy that number.
-//FIXME: the filtered result is not correct at the block edge!!
+//FIXME: the filter size is defined in HW2.cpp which is 9. Here just copy that number. Can use function template
 __constant__ float const_filter[9*9];
+
+
 __global__ void gaussian_blur_shm(const unsigned char* const inputChannel,
                                     unsigned char* const outputChannel,
                                     int numRows, int numCols,
@@ -117,22 +118,33 @@ __global__ void gaussian_blur_shm(const unsigned char* const inputChannel,
     float filtered = 0.0;
     if (x >= numCols || y >= numRows) { return; }
     __shared__ float image_tile[BLOCK_W+8][BLOCK_W+8];
-    int d = 4;
     int img_x, img_y;
     //int blk_x, blk_y;
     
-    img_x = max(x - d, 0);
-    img_y = max(y - d, 0);
+    img_x = max(x - 4, 0);
+    img_y = max(y - 4, 0);
     image_tile[threadIdx.y][threadIdx.x] = float(inputChannel[img_y * numCols + img_x]);
-
-    if ( threadIdx.y >= blockDim.y - 8) {
-        image_tile[threadIdx.y+8][threadIdx.x] = float(inputChannel[(img_y+8) * numCols + img_x]);
+   
+    if (img_x+8 >= numCols){
+        image_tile[threadIdx.y][threadIdx.x+8] = float(inputChannel[img_y * numCols + numCols-1]);
+    } else {
+        if (threadIdx.x >= blockDim.x - 8) {
+            image_tile[threadIdx.y][threadIdx.x+8] = float(inputChannel[img_y * numCols + img_x+8]);
+        }
     }
-    if (threadIdx.x >= blockDim.x - 8) {
-        image_tile[threadIdx.y][threadIdx.x+8] = float(inputChannel[img_y * numCols + img_x+8]);
+    if (img_y+8 >= numRows){
+        image_tile[threadIdx.y+8][threadIdx.x] = float(inputChannel[((numRows-1) * numCols + img_x)]);
+    } else {
+        if ( threadIdx.y >= blockDim.y - 8) {
+            image_tile[threadIdx.y+8][threadIdx.x] = float(inputChannel[(img_y+8) * numCols + img_x]);
+        }
     }
-    if ((threadIdx.y >= blockDim.y - 8) && (threadIdx.x >= blockDim.x - 8)) {
-        image_tile[threadIdx.y+8][threadIdx.x+8] = float(inputChannel[(img_y + 8) * numCols + img_x+8]);
+    if ((img_y+8 >= numRows)&& (img_x+8 >= numCols)) {
+        image_tile[threadIdx.y+8][threadIdx.x+8] = float(inputChannel[(numRows-1) * numCols + numCols-1]);
+    } else {
+        if ((threadIdx.y >= blockDim.y - 8) && (threadIdx.x >= blockDim.x - 8)) {
+            image_tile[threadIdx.y+8][threadIdx.x+8] = float(inputChannel[(img_y + 8) * numCols + img_x+8]);
+        }
     }
     __syncthreads();
     #pragma unroll
