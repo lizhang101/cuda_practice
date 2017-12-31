@@ -135,7 +135,9 @@ __global__ void gaussian_blur_shm(const unsigned char* const inputChannel,
         image_tile[threadIdx.y+8][threadIdx.x+8] = float(inputChannel[(img_y + 8) * numCols + img_x+8]);
     }
     __syncthreads();
+    #pragma unroll
     for (int fy = 0; fy < filterWidth; ++fy){
+        #pragma unroll
         for (int fx = 0; fx < filterWidth; ++fx){
             filtered += image_tile[threadIdx.y + fy][threadIdx.x + fx] * const_filter[fy * filterWidth + fx];
         }
