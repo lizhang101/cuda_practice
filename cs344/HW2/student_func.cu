@@ -102,8 +102,8 @@
 
 #include "utils.h"
 
-static const int BLOCK_W = 32;
-static const int BLOCK_H = 32;
+static const int BLOCK_W = 64;
+static const int BLOCK_H = 9;
 
 //FIXME: the filter size is defined in HW2.cpp which is 9. Here just copy that number. Can use function template
 __constant__ float const_filter[9*9];
@@ -113,35 +113,24 @@ __global__ void gaussian_blur_shm1(const unsigned char* const inputChannel,
                                     int numRows, int numCols,
                                     const float* const filter, const int filterWidth)
 {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int bx = blockIdx.x * blockDim.x ;
+    int by = blockIdx.y * blockDim.y ;
     float filtered = 0.0;
-    if (x >= numCols || y >= numRows) { return; }
+
     __shared__ float image_tile[BLOCK_H+8][BLOCK_W+8];
-    int img_x, img_y;
-    //int blk_x, blk_y;
-    
-    img_x = max(x - 4, 0);
-    img_y = max(y - 4, 0);
-    image_tile[threadIdx.y][threadIdx.x] = float(inputChannel[img_y * numCols + img_x]);
-
-    img_y = min(img_y + BLOCK_H, numRows-1);
-    if (threadIdx.y < 8) {
-        image_tile[threadIdx.y+BLOCK_H][threadIdx.x] = float(inputChannel[img_y * numCols + img_x]);
+    //#pragma unroll
+    for (int ty = threadIdx.y; ty < BLOCK_H+8; ty += BLOCK_H){
+        #pragma unroll
+        for (int tx = threadIdx.x; tx < BLOCK_W+8; tx += BLOCK_W){
+            int iy = min(max(by + ty - 4, 0), numRows-1);
+            int ix = min(max(bx + tx - 4, 0), numCols-1);
+            image_tile[ty][tx] = float(inputChannel[iy * numCols + ix]);
+        }
     }
-
-    img_x = min(img_x + BLOCK_W, numCols-1);
-    img_y = max(y - 4, 0);
-    if (threadIdx.x < 8) {
-        image_tile[threadIdx.y][threadIdx.x+BLOCK_W] = float(inputChannel[img_y * numCols + img_x]);
-    }
-
-    img_y = min(img_y + BLOCK_H, numRows-1);
-    if (threadIdx.x < 8 && threadIdx.y < 8) {
-        image_tile[threadIdx.y+BLOCK_H][threadIdx.x+BLOCK_W] = float(inputChannel[img_y * numCols + img_x]);
-    }
-   
     __syncthreads();
+    int x = bx + threadIdx.x;
+    int y = by + threadIdx.y;
+    if (x >= numCols || y >= numRows) { return; }
     #pragma unroll
     for (int fy = 0; fy < filterWidth; ++fy){
         #pragma unroll
@@ -166,8 +155,8 @@ __global__ void gaussian_blur_shm0(const unsigned char* const inputChannel,
     int img_x, img_y;
     //int blk_x, blk_y;
     
-    img_x = max(x - 4, 0);
-    img_y = max(y - 4, 0);
+    img_x = min(max(x - 4, 0), numRows-1);
+    img_y = min(max(y - 4, 0), numCols-1);
     image_tile[threadIdx.y][threadIdx.x] = float(inputChannel[img_y * numCols + img_x]);
    
     if (img_x+8 >= numCols){
