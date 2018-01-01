@@ -40,8 +40,10 @@ Not using shared memory. One thread working on 9x9 input and output 1 filtered r
 
 5. processing RGB in one kernel instead of using 3 kernels. (TODO)
 
+   The original approach in this practice code separated the RGB channels into 3 images. It should be able to use vector and process RGB in one kernel.
+
 6. one thread loads more data (TODO)
-  item 5 will also load more data per thread compared to using seperated channels, which is the original approche in this practice code.
+  ​
 
 7. Register Blocking (TODO)
 
