@@ -142,55 +142,6 @@ __global__ void gaussian_blur_shm1(const unsigned char* const inputChannel,
     outputChannel[y * numCols + x] = filtered;
 }
 
-__global__ void gaussian_blur_shm0(const unsigned char* const inputChannel,
-                                    unsigned char* const outputChannel,
-                                    int numRows, int numCols,
-                                    const float* const filter, const int filterWidth)
-{
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    float filtered = 0.0;
-    if (x >= numCols || y >= numRows) { return; }
-    __shared__ float image_tile[BLOCK_W+8][BLOCK_W+8];
-    int img_x, img_y;
-    //int blk_x, blk_y;
-    
-    img_x = min(max(x - 4, 0), numRows-1);
-    img_y = min(max(y - 4, 0), numCols-1);
-    image_tile[threadIdx.y][threadIdx.x] = float(inputChannel[img_y * numCols + img_x]);
-   
-    if (img_x+8 >= numCols){
-        image_tile[threadIdx.y][threadIdx.x+8] = float(inputChannel[img_y * numCols + numCols-1]);
-    } else {
-        if (threadIdx.x >= blockDim.x - 8) {
-            image_tile[threadIdx.y][threadIdx.x+8] = float(inputChannel[img_y * numCols + img_x+8]);
-        }
-    }
-    if (img_y+8 >= numRows){
-        image_tile[threadIdx.y+8][threadIdx.x] = float(inputChannel[((numRows-1) * numCols + img_x)]);
-    } else {
-        if ( threadIdx.y >= blockDim.y - 8) {
-            image_tile[threadIdx.y+8][threadIdx.x] = float(inputChannel[(img_y+8) * numCols + img_x]);
-        }
-    }
-    if ((img_y+8 >= numRows)&& (img_x+8 >= numCols)) {
-        image_tile[threadIdx.y+8][threadIdx.x+8] = float(inputChannel[(numRows-1) * numCols + numCols-1]);
-    } else {
-        if ((threadIdx.y >= blockDim.y - 8) && (threadIdx.x >= blockDim.x - 8)) {
-            image_tile[threadIdx.y+8][threadIdx.x+8] = float(inputChannel[(img_y + 8) * numCols + img_x+8]);
-        }
-    }
-    __syncthreads();
-    #pragma unroll
-    for (int fy = 0; fy < filterWidth; ++fy){
-        #pragma unroll
-        for (int fx = 0; fx < filterWidth; ++fx){
-            filtered += image_tile[threadIdx.y + fy][threadIdx.x + fx] * const_filter[fy * filterWidth + fx];
-        }
-    }
-    //implicitly convert to unsighed char
-    outputChannel[y * numCols + x] = filtered;
-}
 __global__
 void gaussian_blur(const unsigned char* const inputChannel,
                    unsigned char* const outputChannel,
