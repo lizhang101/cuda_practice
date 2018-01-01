@@ -46,6 +46,10 @@ Clearly, 32x32 block size is not good for this case. It's better to use wider re
 
 ## Opt5:
 
+processing RGB in one kernel instead of with 3 kernels.
+
+## Opt5:
+
 Register Blocking
 
 ## Opt6:

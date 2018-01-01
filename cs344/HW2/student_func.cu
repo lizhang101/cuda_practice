@@ -103,12 +103,57 @@
 #include "utils.h"
 
 static const int BLOCK_W = 32;
+static const int BLOCK_H = 32;
 
 //FIXME: the filter size is defined in HW2.cpp which is 9. Here just copy that number. Can use function template
 __constant__ float const_filter[9*9];
 
+__global__ void gaussian_blur_shm1(const unsigned char* const inputChannel,
+                                    unsigned char* const outputChannel,
+                                    int numRows, int numCols,
+                                    const float* const filter, const int filterWidth)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    float filtered = 0.0;
+    if (x >= numCols || y >= numRows) { return; }
+    __shared__ float image_tile[BLOCK_H+8][BLOCK_W+8];
+    int img_x, img_y;
+    //int blk_x, blk_y;
+    
+    img_x = max(x - 4, 0);
+    img_y = max(y - 4, 0);
+    image_tile[threadIdx.y][threadIdx.x] = float(inputChannel[img_y * numCols + img_x]);
 
-__global__ void gaussian_blur_shm(const unsigned char* const inputChannel,
+    img_y = min(img_y + BLOCK_H, numRows-1);
+    if (threadIdx.y < 8) {
+        image_tile[threadIdx.y+BLOCK_H][threadIdx.x] = float(inputChannel[img_y * numCols + img_x]);
+    }
+
+    img_x = min(img_x + BLOCK_W, numCols-1);
+    img_y = max(y - 4, 0);
+    if (threadIdx.x < 8) {
+        image_tile[threadIdx.y][threadIdx.x+BLOCK_W] = float(inputChannel[img_y * numCols + img_x]);
+    }
+
+    img_y = min(img_y + BLOCK_H, numRows-1);
+    if (threadIdx.x < 8 && threadIdx.y < 8) {
+        image_tile[threadIdx.y+BLOCK_H][threadIdx.x+BLOCK_W] = float(inputChannel[img_y * numCols + img_x]);
+    }
+   
+    __syncthreads();
+    #pragma unroll
+    for (int fy = 0; fy < filterWidth; ++fy){
+        #pragma unroll
+        for (int fx = 0; fx < filterWidth; ++fx){
+            filtered += image_tile[threadIdx.y + fy][threadIdx.x + fx] * const_filter[fy * filterWidth + fx];
+        }
+    }
+    //implicitly convert to unsighed char
+    outputChannel[y * numCols + x] = filtered;
+}
+
+__global__ void gaussian_blur_shm0(const unsigned char* const inputChannel,
                                     unsigned char* const outputChannel,
                                     int numRows, int numCols,
                                     const float* const filter, const int filterWidth)
@@ -307,7 +352,7 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
                         const int filterWidth)
 {
   //TODO: Set reasonable block size (i.e., number of threads per block)
-  const dim3 blockSize(BLOCK_W, BLOCK_W);
+  const dim3 blockSize(BLOCK_W, BLOCK_H);
 
   //TODO:
   //Compute correct grid size (i.e., number of blocks per kernel launch)
@@ -327,9 +372,9 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
     gaussian_blur<<<gridSize, blockSize>>> (d_green, d_greenBlurred, numRows, numCols, d_filter, filterWidth);
     gaussian_blur<<<gridSize, blockSize>>> (d_blue, d_blueBlurred, numRows, numCols, d_filter, filterWidth);
 #else
-    gaussian_blur_shm<<<gridSize, blockSize>>> (d_red, d_redBlurred, numRows, numCols, d_filter, filterWidth);
-    gaussian_blur_shm<<<gridSize, blockSize>>> (d_green, d_greenBlurred, numRows, numCols, d_filter, filterWidth);
-    gaussian_blur_shm<<<gridSize, blockSize>>> (d_blue, d_blueBlurred, numRows, numCols, d_filter, filterWidth);
+    gaussian_blur_shm1<<<gridSize, blockSize>>> (d_red, d_redBlurred, numRows, numCols, d_filter, filterWidth);
+    gaussian_blur_shm1<<<gridSize, blockSize>>> (d_green, d_greenBlurred, numRows, numCols, d_filter, filterWidth);
+    gaussian_blur_shm1<<<gridSize, blockSize>>> (d_blue, d_blueBlurred, numRows, numCols, d_filter, filterWidth);
 #endif
 
   // Again, call cudaDeviceSynchronize(), then call checkCudaErrors() immediately after
