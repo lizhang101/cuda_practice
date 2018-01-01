@@ -81,140 +81,249 @@
 
 #include "utils.h"
 
-#include <limits.h>
-#include <float.h>
-#include <math.h>
-#include <stdio.h>
+__global__ void reduce_max_min(const float* const d_in, float* d_out, bool is_max=true)
+{
+	extern __shared__ float partial[];
 
-__global__
-void histogram_kernel(unsigned int* d_bins, const float* d_in, const int bin_count, const float lum_min, const float lum_max, const int size) {  
-    int mid = threadIdx.x + blockDim.x * blockIdx.x;
-    if(mid >= size)
-        return;
-    float lum_range = lum_max - lum_min;
-    int bin = ((d_in[mid]-lum_min) / lum_range) * bin_count;
-    
-    atomicAdd(&d_bins[bin], 1);
+	int tid = threadIdx.x;
+	int idx = blockIdx.x *  blockDim.x + tid;
+
+	partial[tid] = d_in[idx];
+	// make sure all data in this block has loaded into shared memory
+	__syncthreads();
+	
+	for(unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1){
+		if(tid < stride){
+			if(is_max)
+				partial[tid] = max(partial[tid], partial[tid+stride]);	
+			else
+				partial[tid] = min(partial[tid], partial[tid+stride]);	
+		}
+		// make sure all operations at one stage are done!
+		__syncthreads();
+	}
+	
+
+	if(tid == 0)
+		d_out[blockIdx.x] = partial[tid];
 }
 
-__global__ 
-void scan_kernel(unsigned int* d_bins, int size) {
-    int mid = threadIdx.x + blockDim.x * blockIdx.x;
-    if(mid >= size)
-        return;
-    
-    for(int s = 1; s <= size; s *= 2) {
-          int spot = mid - s; 
-         
-          unsigned int val = 0;
-          if(spot >= 0)
-              val = d_bins[spot];
-          __syncthreads();
-          if(spot >= 0)
-              d_bins[mid] += val;
-          __syncthreads();
+void reduce(const float* const d_in,float &min_logLum,float &max_logLum,const size_t numRows,const size_t numCols)
+{
 
-    }
-}
-// calculate reduce max or min and stick the value in d_answer.
-__global__
-void reduce_minmax_kernel(const float* const d_in, float* d_out, const size_t size, int minmax) {
-    extern __shared__ float shared[];
-    
-    int mid = threadIdx.x + blockDim.x * blockIdx.x;
-    int tid = threadIdx.x; 
-    
-    // we have 1 thread per block, so copying the entire block should work fine
-    if(mid < size) {
-        shared[tid] = d_in[mid];
-    } else {
-        if(minmax == 0)
-            shared[tid] = FLT_MAX;
-        else
-            shared[tid] = -FLT_MAX;
-    }
-    
-    // wait for all threads to copy the memory
-    __syncthreads();
-    
-    // don't do any thing with memory if we happen to be far off ( I don't know how this works with
-    // sync threads so I moved it after that point )
-    if(mid >= size) {   
-        if(tid == 0) {
-            if(minmax == 0) 
-                d_out[blockIdx.x] = FLT_MAX;
-            else
-                d_out[blockIdx.x] = -FLT_MAX;
+	const int BLOCK_SIZE = numCols;
+	const int GRID_SIZE  = numRows;
+		// declare GPU memory pointers
+	float * d_intermediate, *d_max, *d_min;
+		
+	// allocate GPU memory
+	cudaMalloc((void **) &d_intermediate, GRID_SIZE*sizeof(float));
+	cudaMalloc((void **) &d_max, sizeof(float));
+	cudaMalloc((void **) &d_min, sizeof(float));
 
-        }
-        return;
-    }
-       
-    for(unsigned int s = blockDim.x/2; s > 0; s /= 2) {
-        if(tid < s) {
-            if(minmax == 0) {
-                shared[tid] = min(shared[tid], shared[tid+s]);
-            } else {
-                shared[tid] = max(shared[tid], shared[tid+s]);
-            }
-        }
-        
-        __syncthreads();
-    }
-    
-    if(tid == 0) {
-        d_out[blockIdx.x] = shared[0];
-    }
+	// find maximum;
+	// firstly, find the maximum in each block
+	reduce_max_min<<<GRID_SIZE,BLOCK_SIZE, BLOCK_SIZE*sizeof(float)>>>(d_in, d_intermediate, true);
+	// then, find the global maximum
+	reduce_max_min<<<1, GRID_SIZE, GRID_SIZE*sizeof(float)>>>(d_intermediate, d_max, true);
+
+	checkCudaErrors(cudaMemset(d_intermediate,0,GRID_SIZE*sizeof(float)));
+	// find minimum;
+	// firstly, find the minimum in each block
+	reduce_max_min<<<GRID_SIZE,BLOCK_SIZE, BLOCK_SIZE*sizeof(float)>>>(d_in, d_intermediate,false);
+	// then, find the global minimum
+	reduce_max_min<<<1, GRID_SIZE, GRID_SIZE*sizeof(float)>>>(d_intermediate, d_min, false);
+	
+
+	// transfer the output to CPU
+	checkCudaErrors(cudaMemcpy(&max_logLum, d_max, sizeof(float), cudaMemcpyDeviceToHost));
+	checkCudaErrors(cudaMemcpy(&min_logLum, d_min, sizeof(float), cudaMemcpyDeviceToHost));
+
+	// free GPU memory location
+	checkCudaErrors(cudaFree(d_intermediate));
+	checkCudaErrors(cudaFree(d_max));
+	checkCudaErrors(cudaFree(d_min));
+
+	return;	
 }
 
-int get_max_size(int n, int d) {
-    return (int)ceil( (float)n/(float)d ) + 1;
+
+__global__ void hist(const float* const d_in, unsigned int * const d_out, const float logLumRange, const int min_logLum, const int numBins)
+{
+	int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	float num = d_in[idx];
+	int bin_idx = (num - min_logLum)/logLumRange*numBins;
+	if(bin_idx >= numBins)
+		bin_idx--;
+	atomicAdd(&(d_out[bin_idx]),1);
+	
 }
 
-float reduce_minmax(const float* const d_in, const size_t size, int minmax) {
-    int BLOCK_SIZE = 32;
-    // we need to keep reducing until we get to the amount that we consider 
-    // having the entire thing fit into one block size
-    size_t curr_size = size;
-    float* d_curr_in;
-    
-    checkCudaErrors(cudaMalloc(&d_curr_in, sizeof(float) * size));    
-    checkCudaErrors(cudaMemcpy(d_curr_in, d_in, sizeof(float) * size, cudaMemcpyDeviceToDevice));
 
 
-    float* d_curr_out;
-    
-    dim3 thread_dim(BLOCK_SIZE);
-    const int shared_mem_size = sizeof(float)*BLOCK_SIZE;
-    
-    while(1) {
-        checkCudaErrors(cudaMalloc(&d_curr_out, sizeof(float) * get_max_size(curr_size, BLOCK_SIZE)));
-        
-        dim3 block_dim(get_max_size(size, BLOCK_SIZE));
-        reduce_minmax_kernel<<<block_dim, thread_dim, shared_mem_size>>>(
-            d_curr_in,
-            d_curr_out,
-            curr_size,
-            minmax
-        );
-        //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+__global__ void prefixSum_HS(const unsigned int * const d_in, unsigned int * const d_out)
+{
+	/*	Hillis Steele Scan
+		for d := 1 to log2n do
+			forall k in parallel do
+		 		if k ≥ 2^d then
+					x[out][k] := x[in][k − 2^d-1] + x[in][k]
+		 		else
+					x[out][k] := x[in][k]
+		 	swap(in,out) 
+		This version can handle arrays only as large as can be processed by a single thread block running 
+		on one multiprocessor of a GPU
+	*/
+	extern __shared__ unsigned int temp[];
 
-            
-        // move the current input to the output, and clear the last input if necessary
-        checkCudaErrors(cudaFree(d_curr_in));
-        d_curr_in = d_curr_out;
-        
-        if(curr_size <  BLOCK_SIZE) 
-            break;
-        
-        curr_size = get_max_size(curr_size, BLOCK_SIZE);
-    }
-    
-    // theoretically we should be 
-    float h_out;
-    cudaMemcpy(&h_out, d_curr_out, sizeof(float), cudaMemcpyDeviceToHost);
-    cudaFree(d_curr_out);
-    return h_out;
+	int tid = threadIdx.x;
+	int pout = 0, pin = 1;
+
+	// exclusicve scan
+	temp[tid] =  tid > 0? d_in[tid-1]:0;
+	// make sure all data in this block are loaded into shared shared memory
+	__syncthreads();
+	
+	for(unsigned int stride = 1; stride < blockDim.x; stride <<= 1){
+		// swap double buffer indices
+		pout = 1 - pout;
+		pin  = 1 - pout;
+
+		if(tid >= stride)
+			temp[pout*blockDim.x+tid] = temp[pin*blockDim.x+tid] + temp[pin*blockDim.x+tid - stride];
+		else
+			temp[pout*blockDim.x+tid] = temp[pin*blockDim.x+tid];
+		// make sure all operations at one stage are done!
+		__syncthreads();
+	}
+
+	d_out[tid] = temp[pout*blockDim.x + tid];	
+}
+
+
+__global__ void prefixSum_BL(const unsigned int * const d_in, unsigned int * const d_out, const int nums)
+{
+	/* Blelloch Scan : Up-Sweep(reduce) + Down-Sweep
+		Up-Sweep:
+		for d := 0 to log2n - 1 do
+			for k from 0 to n – 1 by 2^(d+1) in parallel do
+				x[k + 2^(d + 1) - 1] := x[k + 2^d - 1] + x [k + 2^(d+1) - 1] 
+
+		Down-Sweep:
+		x[n - 1] := 0
+		for d := log2n down to 0 do
+			for k from 0 to n – 1 by 2^(d+1) in parallel do
+				t := x[k + 2^d- 1]
+				x[k + 2^d - 1] := x [k + 2^(d+1) - 1]
+				x[k + 2^(d+1) - 1] := t + x [k + 2^(d+1) - 1] 
+	*/
+	extern __shared__ unsigned int temp[];
+
+	int tid = threadIdx.x;
+	// exclusicve scan
+	
+	temp[2*tid] = d_in[2*tid];
+	if(2*tid+1 < nums)
+		temp[2*tid+1] = d_in[2*tid+1];
+	else
+		temp[2*tid+1] = 0;
+
+	// make sure all data in this block are loaded into shared memory
+	__syncthreads();
+	
+	int stride = 1;
+	// reduce step
+	for(unsigned int d = blockDim.x; d > 0; d >>= 1){
+		if(tid < d){	
+			int idx1 = (2*tid+1)*stride - 1;
+			int idx2 = (2*tid+2)*stride - 1;
+			temp[idx2] += temp[idx1];
+		}
+		stride *= 2;
+		// make sure all operations at one stage are done!
+		__syncthreads();
+	}
+
+	// Downsweep Step
+	// set identity value
+	if(tid == 0)
+		temp[nums-1] = 0;
+	for(unsigned int d = 1; d < nums; d <<= 1){
+		stride >>= 1;
+		// make sure all operations at one stage are done!
+		__syncthreads();
+		if( tid < d){
+			int idx1 = (2*tid+1)*stride - 1;
+			int idx2 = (2*tid+2)*stride - 1;
+			unsigned int tmp  = temp[idx1];
+			temp[idx1] = temp[idx2];
+			temp[idx2] += tmp;
+		}		
+	}
+	// make sure all operations at the last  stage are done!
+	__syncthreads();
+	d_out[2*tid] = temp[2*tid];
+	if(2*tid+1 < nums)
+		d_out[2*tid+1] = temp[2*tid+1];
+}
+
+// Scan algorithm from Course : Hetergeneous Parallel Programming
+__global__ void prefixSum_HPP(const unsigned int * const d_in, unsigned int * const d_out, const int nums)
+{
+
+	extern __shared__ unsigned int temp[];
+
+	int tid = threadIdx.x;
+
+	// exclusicve scan
+	if(tid == 0){
+		temp[2*tid] = 0;
+		temp[2*tid+1] = d_in[2*tid];	
+	}
+	else{
+		temp[2*tid] = d_in[2*tid-1];
+		if(2*tid+1 < nums)
+			temp[2*tid+1] = d_in[2*tid];
+		else
+			temp[2*tid+1] = 0;
+	}
+	// make sure all data in this block are loaded into shared shared memory
+	__syncthreads();
+	
+	// Reduction Phase
+	for(unsigned int stride = 1; stride <= blockDim.x; stride <<= 1){
+		// first update all idx == 2n-1, then 4n-1, then 8n-1 ...  
+		// finaly 2(blockDim.x/2) * n - 1(only 1 value will be updated partial[blockDim.x-1])
+		int idx = (tid+1)*stride*2 - 1;
+		if( idx  < 2*blockDim.x)
+			temp[idx] += temp[idx-stride];
+		// make sure all operations at one stage are done!
+		__syncthreads();
+	}
+	// Example:
+	// After reduction phase , position at 0, 1, 3, 7, ... has their final values (blockDim.x == 8)
+	// then we update values reversely.
+	// first use position 3's value to update position 5(stride == 2 == blockDim.x/4, idx == 3 == (0+1)*2*2-1, only 1 thread do calculation)
+	// then use position 1 to update postion 2 , position 3 to update position 4, position 5 to update position 6
+	//			(stride == 1 == blockDim.x/8, idx == (0+1)*1*2-1=1,(1+1)*1*2-1=3, (2+1)*1*2-1=5, 3 threads do calculation)
+
+	// Post Reduction Reverse Phase
+	for(unsigned int stride = blockDim.x/2; stride > 0; stride >>= 1){
+		// first update all idx == 2(blockDim.x/4) * n - 1 + blockDim.x/4, 
+		// then 2(blockDim.x/8)n-1+blockDim.x/8, then 2(blockDim.x/16)n-1 + blockDim.x/16...  
+		// finaly 2 * n - 1
+		int idx = (tid+1)*stride*2 - 1;
+		if( idx + stride  < 2*blockDim.x)
+			temp[idx + stride] += temp[idx];
+		// make sure all operations at one stage are done!
+		__syncthreads();
+	}
+
+	// exclusive scan
+
+	d_out[2*tid] = temp[2*tid];
+	if(2*tid+1 < nums)
+		d_out[2*tid+1] = temp[2*tid+1];
 }
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
@@ -236,47 +345,28 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
        the cumulative distribution of luminance values (this should go in the
        incoming d_cdf pointer which already has been allocated for you)       */
 
-    const size_t size = numRows*numCols;
-    min_logLum = reduce_minmax(d_logLuminance, size, 0);
-    max_logLum = reduce_minmax(d_logLuminance, size, 1);
-    
-    printf("got min of %f\n", min_logLum);
-    printf("got max of %f\n", max_logLum);
-    printf("numBins %d\n", numBins);
-    
-    unsigned int* d_bins;
-    size_t histo_size = sizeof(unsigned int)*numBins;
-
-    checkCudaErrors(cudaMalloc(&d_bins, histo_size));    
-    checkCudaErrors(cudaMemset(d_bins, 0, histo_size));  
-    dim3 thread_dim(1024);
-    dim3 hist_block_dim(get_max_size(size, thread_dim.x));
-    histogram_kernel<<<hist_block_dim, thread_dim>>>(d_bins, d_logLuminance, numBins, min_logLum, max_logLum, size);
-    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-    unsigned int h_out[100];
-    cudaMemcpy(&h_out, d_bins, sizeof(unsigned int)*100, cudaMemcpyDeviceToHost);
-    /*
-    for(int i = 0; i < 100; i++)
-        printf("hist out %d\n", h_out[i]);
-    */
-    
-    dim3 scan_block_dim(get_max_size(numBins, thread_dim.x));
-
-    scan_kernel<<<scan_block_dim, thread_dim>>>(d_bins, numBins);
-    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-    
-    cudaMemcpy(&h_out, d_bins, sizeof(unsigned int)*100, cudaMemcpyDeviceToHost);
-    /*
-    for(int i = 0; i < 100; i++)
-        printf("cdf out %d\n", h_out[i]);
-    */
-    
-
-    cudaMemcpy(d_cdf, d_bins, histo_size, cudaMemcpyDeviceToDevice);
-
-    
-    checkCudaErrors(cudaFree(d_bins));
+	
+	// Step 1 : find minimum and maximum value
+	reduce(d_logLuminance, min_logLum, max_logLum, numRows, numCols);
 
 
+	// Step 2: find the range 
+	float logLumRange = max_logLum - min_logLum;
+
+	// Step 3 : generate a histogram of all the values
+	// declare GPU memory pointers
+	unsigned int  *d_bins;
+	// allocate GPU memory
+	checkCudaErrors(cudaMalloc((void **) &d_bins, numBins*sizeof(unsigned int)));
+	checkCudaErrors(cudaMemset(d_bins,0,numBins*sizeof(unsigned int)));
+	
+	hist<<<numRows, numCols>>>(d_logLuminance, d_bins, logLumRange, min_logLum, numBins);
+	
+	// Step 4 : prefix sum
+	//prefixSum_HS<<<1, numBins, numBins*sizeof(unsigned int)>>>(d_bins, d_cdf);
+	//prefixSum_HPP<<<1, ceil(numBins/2), numBins*sizeof(unsigned int)>>>(d_bins, d_cdf, numBins);
+	prefixSum_BL<<<1, ceil(numBins/2), numBins*sizeof(unsigned int)>>>(d_bins, d_cdf, numBins);
+	// free GPU memory allocation
+	checkCudaErrors(cudaFree(d_bins));
 }
+
