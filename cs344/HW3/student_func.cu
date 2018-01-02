@@ -185,19 +185,13 @@ __global__ void prefixSum_HS(const unsigned int * const d_in, unsigned int * con
 	__syncthreads();
 	
 	for(unsigned int stride = 1; stride < blockDim.x; stride <<= 1){
-		// swap double buffer indices
-		pout = 1 - pout;
-		pin  = 1 - pout;
 
 		if(tid >= stride)
-			temp[pout*blockDim.x+tid] = temp[pin*blockDim.x+tid] + temp[pin*blockDim.x+tid - stride];
-		else
-			temp[pout*blockDim.x+tid] = temp[pin*blockDim.x+tid];
-		// make sure all operations at one stage are done!
+			temp[blockDim.x+tid] = temp[blockDim.x+tid] + temp[blockDim.x+tid - stride];
 		__syncthreads();
 	}
 
-	d_out[tid] = temp[pout*blockDim.x + tid];	
+	d_out[tid] = temp[blockDim.x + tid];	
 }
 
 

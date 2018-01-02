@@ -47,7 +47,9 @@ Not using shared memory. One thread working on 9x9 input and output 1 filtered r
 
 7. Register Blocking (TODO)
 
-8. Optimize for SMEM bank conflicts and Register Bank Conflict. 
+8. Software prefetch (TODO)
+
+9. Optimize for SMEM bank conflicts and Register Bank Conflict. 
 
    Used nvvp, SMEM has 0 bank conflicts.
 
