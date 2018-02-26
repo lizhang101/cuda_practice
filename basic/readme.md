@@ -86,3 +86,29 @@ E.g. A running sum of elements y[n] = sum<i=[1:n]>(x[i])
 * kernel lifetime.
 * must be declared within the kernel function body.
 * Very fast.
+
+### Register and local memory
+
+* Memory can be allocated right within the kernel
+  * Thread scope, kenel lifetime
+* non-array memory
+  * int tid = ...
+  * stored in a register
+  * very fast
+* Array memory
+  * Stored in "local memory"
+  * local memory is an abstraction, actually put in global memory
+  * slow as global memory
+
+## Thread Cooperation and Synchronization
+
+* barrier: __syncthreads()
+* within a block
+
+## Atomic
+
+* Grid scope.
+* atomic operations ensure that only one thread can access the location
+* atomicOP(x, y)
+  * t1 = *x; t2 = t1 OP y; *x = t2;
+* #include "sm_20_atomic_functions.h"

@@ -15,13 +15,20 @@ __global__ void addTen(float *d, int count)
                             blockIdx.y * gridDim.x +
                             blockIdx.z * gridDim.x * gridDim.y;
     int tid = block_pos_in_grid * threads_per_block + thread_pos_in_block;
+    int array[4];
+    for (int i = 0; i < 4; i++)
+    {
+        //will be in local memory (?)
+        array[i] = d[i];
+    }
     //guard condition
     if (tid < count)
     {
-        d[tid] += 10;
+        for (int i=0; i<4; i++)
+        {
+            d[tid] += array[i];
+        }
     }
-                            
-
 }
 
 int main()
