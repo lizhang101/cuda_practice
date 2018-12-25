@@ -1,7 +1,6 @@
 #include <cstdlib>
 #include <stdio.h>
-#include <cassert>
-#include <cuda_runtime.h>
+#include <cassert> #include <cuda_runtime.h>
 /*
    Naive implementation.
    Allocate one thread for one element in result matrix, processing dot(Arow, Bcol);
@@ -64,6 +63,7 @@ __global__ void kMatrixMul2 (float *d_res,
     int bStep = blockDim.y*n2;
     int tx = threadIdx.x;
     int ty = threadIdx.y;
+    float c = 0.0f;
     int reg_tiles = BLOCK_SIZE / REGT_SIZE;
 
     float acc[REGT_SIZE][REGT_SIZE];
